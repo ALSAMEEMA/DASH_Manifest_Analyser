@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Analyze MPEG-DASH .mpd manifests visually — inspect periods, adaptation sets, representations, DRM, segments, and more.">
+  <meta name="theme-color" content="#0a0a0f">
+  <meta property="og:title" content="DASH MPD Analyzer">
+  <meta property="og:description" content="Analyze MPEG-DASH .mpd manifests visually — inspect periods, adaptation sets, representations, DRM, segments, and more.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+  <title>DASH MPD Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <div class="container">
+
+    <!-- HEADER -->
+    <div class="header">
+      <div>
+        <h1>DASH MPD Analyzer</h1>
+        <p class="subtitle">Analyze MPEG-DASH .mpd manifests visually</p>
+      </div>
+      <button id="themeToggle" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">☀️</button>
+    </div>
+
+    <div class="card">
+
+      <!-- URL INPUT -->
+      <label for="manifestUrl" class="input-label">MPD URL</label>
+      <div class="url-row">
+        <input type="url" id="manifestUrl" placeholder="Enter .mpd manifest URL...">
+        <button id="loadUrlBtn" class="primary-btn">Load URL</button>
+      </div>
+
+      <!-- HISTORY -->
+      <div id="historyContainer" class="history-container" style="display:none;">
+        <label class="input-label">Recent URLs</label>
+        <div id="historyList" class="history-list"></div>
+      </div>
+
+      <p class="or-text">OR UPLOAD / DROP FILE</p>
+
+      <!-- FILE DROP ZONE -->
+      <div id="dropZone" class="drop-zone">
+        <div class="drop-zone-content">
+          <span class="drop-zone-icon">📁</span>
+          <span class="drop-zone-text">Drop .mpd file here or</span>
+          <label for="fileInput" class="drop-zone-browse">browse files</label>
+        </div>
+        <input type="file" id="fileInput" accept=".mpd,.xml,.txt" class="drop-zone-input">
+      </div>
+
+      <p class="or-text">OR PASTE CONTENT</p>
+
+      <!-- TEXTAREA -->
+      <textarea id="manifestInput" placeholder="Paste .mpd manifest XML content here..."></textarea>
+
+      <button id="analyzeBtn" class="primary-btn full-width">Analyze MPD</button>
+
+      <!-- LOADING -->
+      <div id="loadingIndicator" class="loading" style="display:none;">
+        <div class="spinner"></div>
+        <span>Loading manifest...</span>
+      </div>
+
+      <!-- ERROR -->
+      <div id="errorMessage" class="error-message" style="display:none;"></div>
+
+    </div>
+
+    <!-- RAW MANIFEST VIEWER -->
+    <div id="rawViewer" class="results" style="display:none;">
+      <div class="results-header">
+        <h2>Raw MPD</h2>
+        <div class="results-actions">
+          <button id="copyRawBtn" class="icon-btn" title="Copy raw MPD" aria-label="Copy raw MPD">📋</button>
+          <button id="toggleRawBtn" class="icon-btn" title="Toggle raw view" aria-label="Toggle raw view">▶</button>
+        </div>
+      </div>
+      <pre id="rawContent" class="raw-content"></pre>
+    </div>
+
+    <!-- RESULTS -->
+    <div class="results">
+      <div class="results-header">
+        <h2>Analysis Results</h2>
+        <div class="results-actions">
+          <span id="autoRefreshBadge" class="auto-refresh-badge" style="display:none;" title="Click to stop">
+            <span class="auto-refresh-dot"></span> LIVE — Auto-refreshing
+          </span>
+          <button id="copyResultsBtn" class="icon-btn" title="Copy results" aria-label="Copy results" style="display:none;">📋</button>
+          <button id="exportJsonBtn" class="icon-btn" title="Export as JSON" aria-label="Export as JSON" style="display:none;">💾</button>
+        </div>
+      </div>
+      <div id="output">
+        <div class="empty-state">No MPD analyzed yet</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="script.js"></script>
+
+</body>
+
+</html>
