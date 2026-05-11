@@ -2,6 +2,8 @@
 
 A browser-based DASH MPD (.mpd) analyzer — inspect periods, adaptation sets, representations, segments, DRM, low-latency DASH, and more with a modern visual UI. Zero dependencies, no build step.
 
+**[Live Demo →](https://alsameema.github.io/DASH_Manifest_Analyser/)**
+
 ## Features
 
 ### Manifest Analysis
