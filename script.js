@@ -989,6 +989,52 @@ function parseMPD(xmlString, baseUrl) {
     result.warnings.push("Static MPD missing mediaPresentationDuration.");
   }
 
+  // DASH-IF IOP Conformance Checks
+  if (result.type === "dynamic" && !result.minimumUpdatePeriod) {
+    result.warnings.push("DASH-IF IOP: Dynamic MPD should include @minimumUpdatePeriod.");
+  }
+  if (result.type === "dynamic" && !result.timeShiftBufferDepth) {
+    result.warnings.push("DASH-IF IOP: Dynamic MPD should include @timeShiftBufferDepth for DVR window.");
+  }
+  for (const period of result.periods) {
+    for (const as of period.adaptationSets) {
+      if (as.contentType === "video" && as.representations.length > 1 && !as.segmentAlignment && !as.subsegmentAlignment) {
+        result.warnings.push("DASH-IF IOP: Video AdaptationSet '" + as.id + "' with multiple Representations should set @segmentAlignment=\"true\" for seamless switching.");
+        break;
+      }
+    }
+  }
+  // Check for mixed codecs in same AdaptationSet
+  for (const period of result.periods) {
+    for (const as of period.adaptationSets) {
+      if (as.representations.length > 1) {
+        const baseCodecs = as.representations.map(r => (r.codecs || "").split(".")[0]).filter(Boolean);
+        const unique = [...new Set(baseCodecs)];
+        if (unique.length > 1) {
+          result.warnings.push("DASH-IF IOP: AdaptationSet '" + as.id + "' mixes codec families (" + unique.join(", ") + "). Separate into distinct AdaptationSets.");
+          break;
+        }
+      }
+    }
+  }
+  // Check video representations have resolution
+  const videoMissingRes = result.videoRepresentations.filter(r => !r.width || !r.height);
+  if (videoMissingRes.length > 0) {
+    result.warnings.push("DASH-IF IOP: " + videoMissingRes.length + " video Representation(s) missing @width/@height attributes.");
+  }
+  // Check all representations have bandwidth
+  const missingBw = result.videoRepresentations.concat(result.audioRepresentations).filter(r => !r.bandwidth || r.bandwidth === "0");
+  if (missingBw.length > 0) {
+    result.warnings.push("DASH-IF IOP: " + missingBw.length + " Representation(s) missing or zero @bandwidth.");
+  }
+  // Check DRM has mp4protection signaling
+  if (result.drm.length > 0) {
+    const hasMp4Protection = result.drm.some(d => d.systemId === "urn:mpeg:dash:mp4protection:2011");
+    if (!hasMp4Protection) {
+      result.warnings.push("DASH-IF IOP: Encrypted content should include ContentProtection with schemeIdUri=\"urn:mpeg:dash:mp4protection:2011\".");
+    }
+  }
+
   return result;
 }
 
@@ -1397,6 +1443,187 @@ function drawDurationChart(canvas, durations, targetDuration) {
 }
 
 // ============================
+// BANDWIDTH LADDER CHART
+// ============================
+
+function drawBandwidthLadder(canvas, reps) {
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.scale(dpr, dpr);
+
+  const isDark = !document.documentElement.getAttribute("data-theme");
+  const textColor = isDark ? "#8b8fa3" : "#5a5e73";
+  const gridColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)";
+  const dotColor = isDark ? "rgba(91, 141, 239, 0.9)" : "rgba(74, 114, 212, 0.9)";
+  const dotGlow = isDark ? "rgba(91, 141, 239, 0.3)" : "rgba(74, 114, 212, 0.2)";
+  const lineColor = isDark ? "rgba(91, 141, 239, 0.3)" : "rgba(74, 114, 212, 0.2)";
+
+  const padLeft = 70, padRight = 30, padTop = 20, padBottom = 40;
+  const chartW = w - padLeft - padRight;
+  const chartH = h - padTop - padBottom;
+
+  // sort by bandwidth
+  const sorted = [...reps].sort((a, b) => parseInt(a.bandwidth) - parseInt(b.bandwidth));
+
+  const bandwidths = sorted.map(r => parseInt(r.bandwidth) || 0);
+  const heights = sorted.map(r => parseInt(r.height) || 0);
+  const maxBw = Math.max(...bandwidths) * 1.1;
+  const maxH = Math.max(...heights) * 1.15;
+
+  // Grid lines (bandwidth axis - Y)
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 1;
+  ctx.font = "10px Inter, sans-serif";
+  ctx.fillStyle = textColor;
+  ctx.textAlign = "right";
+  for (let i = 0; i <= 5; i++) {
+    const y = padTop + chartH - (chartH * i / 5);
+    ctx.beginPath();
+    ctx.moveTo(padLeft, y);
+    ctx.lineTo(w - padRight, y);
+    ctx.stroke();
+    const bwVal = (maxBw * i / 5);
+    ctx.fillText(bwVal >= 1000000 ? (bwVal / 1000000).toFixed(1) + "M" : (bwVal / 1000).toFixed(0) + "k", padLeft - 8, y + 3);
+  }
+
+  // X axis labels (resolution height)
+  ctx.textAlign = "center";
+  for (let i = 0; i <= 4; i++) {
+    const x = padLeft + (chartW * i / 4);
+    const hVal = Math.round(maxH * i / 4);
+    ctx.fillText(hVal + "p", x, h - 8);
+  }
+
+  // Axis labels
+  ctx.fillStyle = textColor;
+  ctx.font = "10px Inter, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("Resolution (height)", w / 2, h - 2);
+  ctx.save();
+  ctx.translate(12, padTop + chartH / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText("Bandwidth (bps)", 0, 0);
+  ctx.restore();
+
+  // Connect dots with line
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  sorted.forEach((r, i) => {
+    const x = padLeft + (heights[i] / maxH) * chartW;
+    const y = padTop + chartH - (bandwidths[i] / maxBw) * chartH;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Draw dots
+  sorted.forEach((r, i) => {
+    const x = padLeft + (heights[i] / maxH) * chartW;
+    const y = padTop + chartH - (bandwidths[i] / maxBw) * chartH;
+
+    // Glow
+    ctx.beginPath();
+    ctx.arc(x, y, 8, 0, Math.PI * 2);
+    ctx.fillStyle = dotGlow;
+    ctx.fill();
+
+    // Dot
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = dotColor;
+    ctx.fill();
+
+    // Label
+    ctx.fillStyle = textColor;
+    ctx.font = "9px Inter, sans-serif";
+    ctx.textAlign = "center";
+    const label = (r.width && r.height) ? r.width + "x" + r.height : "";
+    ctx.fillText(label, x, y - 12);
+  });
+}
+
+// ============================
+// MULTI-PERIOD TIMELINE
+// ============================
+
+function drawPeriodTimeline(container, periods, totalDuration) {
+  container.innerHTML = "";
+  container.className = "period-timeline";
+
+  if (periods.length === 0) return;
+
+  // Calculate period start/end times
+  let accumulated = 0;
+  const periodTimes = periods.map((p, i) => {
+    let start = 0;
+    let dur = p.durationSeconds || 0;
+
+    if (p.start) {
+      start = parseISO8601Duration(p.start);
+    } else {
+      start = accumulated;
+    }
+
+    if (dur === 0 && totalDuration > 0 && i === periods.length - 1) {
+      dur = totalDuration - start;
+    }
+
+    accumulated = start + dur;
+    return { id: p.id, start, duration: dur, adaptationSets: p.adaptationSets.length };
+  });
+
+  const effectiveTotal = totalDuration || accumulated || 1;
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "period-timeline-header";
+  header.textContent = "Total: " + formatDuration(effectiveTotal);
+  container.appendChild(header);
+
+  // Timeline bar
+  const bar = document.createElement("div");
+  bar.className = "period-timeline-bar";
+
+  const colors = ["#5b8def", "#7c5bef", "#ef5b8d", "#5befa0", "#efb85b", "#5bc8ef"];
+
+  periodTimes.forEach((p, i) => {
+    const pct = (p.duration / effectiveTotal) * 100;
+    const seg = document.createElement("div");
+    seg.className = "period-timeline-segment";
+    seg.style.width = Math.max(pct, 0.5) + "%";
+    seg.style.backgroundColor = colors[i % colors.length];
+    seg.title = p.id + "\nStart: " + formatDuration(p.start) + "\nDuration: " + formatDuration(p.duration) + "\nAdaptation Sets: " + p.adaptationSets;
+    bar.appendChild(seg);
+  });
+
+  container.appendChild(bar);
+
+  // Legend
+  const legend = document.createElement("div");
+  legend.className = "period-timeline-legend";
+
+  periodTimes.forEach((p, i) => {
+    const item = document.createElement("div");
+    item.className = "period-timeline-legend-item";
+    const dot = document.createElement("span");
+    dot.className = "period-timeline-dot";
+    dot.style.backgroundColor = colors[i % colors.length];
+    item.appendChild(dot);
+    const label = document.createElement("span");
+    label.textContent = p.id + " (" + formatDuration(p.duration) + ")";
+    item.appendChild(label);
+    legend.appendChild(item);
+  });
+
+  container.appendChild(legend);
+}
+
+// ============================
 // RAW MANIFEST RENDERER
 // ============================
 
@@ -1458,6 +1685,9 @@ function createCollapsibleSection(titleText, count, startCollapsed) {
 
   const header = document.createElement("div");
   header.className = "section-header";
+  header.setAttribute("role", "button");
+  header.setAttribute("tabindex", "0");
+  header.setAttribute("aria-expanded", startCollapsed ? "false" : "true");
 
   const arrow = document.createElement("span");
   arrow.className = "section-arrow";
@@ -1468,6 +1698,7 @@ function createCollapsibleSection(titleText, count, startCollapsed) {
   // Use saved state if available, otherwise use default
   let collapsed = (titleText in _expandedSections) ? !_expandedSections[titleText] : startCollapsed;
   arrow.textContent = collapsed ? "▶" : "▼";
+  header.setAttribute("aria-expanded", collapsed ? "false" : "true");
   header.appendChild(arrow);
   header.appendChild(title);
 
@@ -1485,11 +1716,20 @@ function createCollapsibleSection(titleText, count, startCollapsed) {
   if (collapsed) body.style.display = "none";
   section.appendChild(body);
 
-  header.addEventListener("click", () => {
+  const toggle = () => {
     const isCollapsed = body.style.display === "none";
     body.style.display = isCollapsed ? "block" : "none";
     arrow.textContent = isCollapsed ? "▼" : "▶";
+    header.setAttribute("aria-expanded", isCollapsed ? "true" : "false");
     _expandedSections[titleText] = isCollapsed; // true = now expanded
+  };
+
+  header.addEventListener("click", toggle);
+  header.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      toggle();
+    }
   });
 
   return { section, body };
@@ -2238,6 +2478,35 @@ function renderResults(data) {
     jumpSections.push({ label: "Chart", el: section });
   }
 
+  // Bandwidth Ladder Chart
+  const ladderReps = data.videoRepresentations.filter(r => r.width && r.height && r.bandwidth);
+  if (ladderReps.length >= 2) {
+    const { section, body } = createCollapsibleSection("Bandwidth Ladder", ladderReps.length, false);
+    const canvas = document.createElement("canvas");
+    canvas.className = "duration-chart bandwidth-ladder-chart";
+    body.appendChild(canvas);
+    outputEl.appendChild(section);
+
+    requestAnimationFrame(() => drawBandwidthLadder(canvas, ladderReps));
+
+    section.querySelector(".section-header").addEventListener("click", () => {
+      setTimeout(() => {
+        if (body.style.display !== "none") drawBandwidthLadder(canvas, ladderReps);
+      }, 50);
+    });
+    jumpSections.push({ label: "Ladder", el: section });
+  }
+
+  // Multi-Period Timeline
+  if (data.periods.length > 1) {
+    const { section, body } = createCollapsibleSection("Period Timeline", data.periods.length, false);
+    const timelineContainer = document.createElement("div");
+    body.appendChild(timelineContainer);
+    outputEl.appendChild(section);
+    drawPeriodTimeline(timelineContainer, data.periods, data.durationSeconds);
+    jumpSections.push({ label: "Timeline", el: section });
+  }
+
   // Warnings
   if (data.warnings.length > 0) {
     const { section, body } = createCollapsibleSection("Warnings", data.warnings.length, false);
@@ -2940,6 +3209,16 @@ function copyResults() {
   navigator.clipboard.writeText(document.getElementById("output").innerText).then(() => showToast("Results copied!"));
 }
 
+function shareUrl() {
+  const url = document.getElementById("manifestUrl").value.trim();
+  if (!url || !isValidUrl(url)) {
+    showToast("Enter a valid URL first");
+    return;
+  }
+  const shareLink = window.location.origin + window.location.pathname + "?url=" + encodeURIComponent(url);
+  navigator.clipboard.writeText(shareLink).then(() => showToast("Shareable link copied!"));
+}
+
 function exportJson() {
   if (!window._lastAnalysis) return;
   const blob = new Blob([JSON.stringify(window._lastAnalysis, null, 2)], { type: "application/json" });
@@ -2971,6 +3250,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Buttons
   document.getElementById("loadUrlBtn").addEventListener("click", loadManifestFromUrl);
+  document.getElementById("shareUrlBtn").addEventListener("click", shareUrl);
   document.getElementById("analyzeBtn").addEventListener("click", () => analyzeManifest());
   document.getElementById("themeToggle").addEventListener("click", toggleTheme);
   document.getElementById("copyRawBtn").addEventListener("click", copyRawManifest);
@@ -3026,4 +3306,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   initTheme();
   renderHistory();
+
+  // URL parameter support — auto-load from ?url=...
+  const params = new URLSearchParams(window.location.search);
+  const urlParam = params.get("url");
+  if (urlParam && isValidUrl(urlParam)) {
+    document.getElementById("manifestUrl").value = urlParam;
+    loadManifestFromUrl();
+  }
 });
