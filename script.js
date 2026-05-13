@@ -927,6 +927,15 @@ function parseMPD(xmlString, baseUrl) {
         };
         repData._totalDurationSeconds = liveInfo.totalDuration;
         repData._liveInfo = liveInfo;
+
+        // Infer contentType from rep mimeType if still not set
+        if (!repData.contentType && repData.mimeType) {
+          const repMime = repData.mimeType.toLowerCase();
+          if (repMime.includes("video")) repData.contentType = "video";
+          else if (repMime.includes("audio")) repData.contentType = "audio";
+          else if (repMime.includes("text") || repMime.includes("subtitle") || repMime.includes("application")) repData.contentType = "text";
+        }
+
         if (repData.isTrickMode) {
           result.trickModeAdaptations.push(repData);
         } else if (repData.isThumbnail) {
@@ -1458,11 +1467,34 @@ function drawBandwidthLadder(canvas, reps) {
   const isDark = !document.documentElement.getAttribute("data-theme");
   const textColor = isDark ? "#8b8fa3" : "#5a5e73";
   const gridColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)";
-  const dotColor = isDark ? "rgba(91, 141, 239, 0.9)" : "rgba(74, 114, 212, 0.9)";
-  const dotGlow = isDark ? "rgba(91, 141, 239, 0.3)" : "rgba(74, 114, 212, 0.2)";
-  const lineColor = isDark ? "rgba(91, 141, 239, 0.3)" : "rgba(74, 114, 212, 0.2)";
 
-  const padLeft = 70, padRight = 30, padTop = 20, padBottom = 40;
+  // Color palette per codec family
+  const codecColors = [
+    { dark: "rgba(91, 141, 239, 0.9)", light: "rgba(74, 114, 212, 0.9)", glow: isDark ? "rgba(91, 141, 239, 0.3)" : "rgba(74, 114, 212, 0.2)", line: isDark ? "rgba(91, 141, 239, 0.3)" : "rgba(74, 114, 212, 0.2)" },
+    { dark: "rgba(239, 141, 91, 0.9)", light: "rgba(212, 114, 74, 0.9)", glow: isDark ? "rgba(239, 141, 91, 0.3)" : "rgba(212, 114, 74, 0.2)", line: isDark ? "rgba(239, 141, 91, 0.3)" : "rgba(212, 114, 74, 0.2)" },
+    { dark: "rgba(141, 239, 91, 0.9)", light: "rgba(94, 180, 74, 0.9)", glow: isDark ? "rgba(141, 239, 91, 0.3)" : "rgba(94, 180, 74, 0.2)", line: isDark ? "rgba(141, 239, 91, 0.3)" : "rgba(94, 180, 74, 0.2)" },
+    { dark: "rgba(239, 91, 201, 0.9)", light: "rgba(190, 74, 160, 0.9)", glow: isDark ? "rgba(239, 91, 201, 0.3)" : "rgba(190, 74, 160, 0.2)", line: isDark ? "rgba(239, 91, 201, 0.3)" : "rgba(190, 74, 160, 0.2)" },
+  ];
+
+  // Group reps by codec family
+  function getCodecFamily(codecs) {
+    if (!codecs) return "unknown";
+    const c = codecs.toLowerCase();
+    if (c.startsWith("avc1") || c.startsWith("avc3")) return "H.264";
+    if (c.startsWith("hev1") || c.startsWith("hvc1")) return "H.265";
+    if (c.startsWith("vp09") || c.startsWith("vp9")) return "VP9";
+    if (c.startsWith("vp08") || c.startsWith("vp8")) return "VP8";
+    if (c.startsWith("av01")) return "AV1";
+    return codecs.split(".")[0];
+  }
+
+  const families = [];
+  reps.forEach(r => {
+    const fam = getCodecFamily(r.codecs);
+    if (!families.includes(fam)) families.push(fam);
+  });
+
+  const padLeft = 70, padRight = 30, padTop = 20, padBottom = families.length > 1 ? 55 : 40;
   const chartW = w - padLeft - padRight;
   const chartH = h - padTop - padBottom;
 
@@ -1495,56 +1527,90 @@ function drawBandwidthLadder(canvas, reps) {
   for (let i = 0; i <= 4; i++) {
     const x = padLeft + (chartW * i / 4);
     const hVal = Math.round(maxH * i / 4);
-    ctx.fillText(hVal + "p", x, h - 8);
+    ctx.fillText(hVal + "p", x, h - padBottom + 18);
   }
 
   // Axis labels
   ctx.fillStyle = textColor;
   ctx.font = "10px Inter, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("Resolution (height)", w / 2, h - 2);
+  ctx.fillText("Resolution (height)", w / 2, h - padBottom + 30);
   ctx.save();
   ctx.translate(12, padTop + chartH / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.fillText("Bandwidth (bps)", 0, 0);
   ctx.restore();
 
-  // Connect dots with line
-  ctx.strokeStyle = lineColor;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  sorted.forEach((r, i) => {
-    const x = padLeft + (heights[i] / maxH) * chartW;
-    const y = padTop + chartH - (bandwidths[i] / maxBw) * chartH;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
+  // Draw per codec family
+  families.forEach((fam, famIdx) => {
+    const colorSet = codecColors[famIdx % codecColors.length];
+    const dotColor = isDark ? colorSet.dark : colorSet.light;
 
-  // Draw dots
-  sorted.forEach((r, i) => {
-    const x = padLeft + (heights[i] / maxH) * chartW;
-    const y = padTop + chartH - (bandwidths[i] / maxBw) * chartH;
+    // Filter and sort reps for this family
+    const famReps = sorted.filter(r => getCodecFamily(r.codecs) === fam);
+    const famBw = famReps.map(r => parseInt(r.bandwidth) || 0);
+    const famH = famReps.map(r => parseInt(r.height) || 0);
 
-    // Glow
+    // Connect dots with line
+    ctx.strokeStyle = colorSet.line;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(x, y, 8, 0, Math.PI * 2);
-    ctx.fillStyle = dotGlow;
-    ctx.fill();
+    famReps.forEach((r, i) => {
+      const x = padLeft + (famH[i] / maxH) * chartW;
+      const y = padTop + chartH - (famBw[i] / maxBw) * chartH;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
 
-    // Dot
-    ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI * 2);
-    ctx.fillStyle = dotColor;
-    ctx.fill();
+    // Draw dots
+    famReps.forEach((r, i) => {
+      const x = padLeft + (famH[i] / maxH) * chartW;
+      const y = padTop + chartH - (famBw[i] / maxBw) * chartH;
 
-    // Label
-    ctx.fillStyle = textColor;
-    ctx.font = "9px Inter, sans-serif";
-    ctx.textAlign = "center";
-    const label = (r.width && r.height) ? r.width + "x" + r.height : "";
-    ctx.fillText(label, x, y - 12);
+      // Glow
+      ctx.beginPath();
+      ctx.arc(x, y, 8, 0, Math.PI * 2);
+      ctx.fillStyle = colorSet.glow;
+      ctx.fill();
+
+      // Dot
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = dotColor;
+      ctx.fill();
+
+      // Label
+      ctx.fillStyle = textColor;
+      ctx.font = "9px Inter, sans-serif";
+      ctx.textAlign = "center";
+      const label = (r.width && r.height) ? r.width + "x" + r.height : "";
+      ctx.fillText(label, x, y - 12);
+    });
   });
+
+  // Legend (if multiple codec families)
+  if (families.length > 1) {
+    ctx.font = "10px Inter, sans-serif";
+    ctx.textAlign = "left";
+    const legendY = h - 8;
+    let legendX = padLeft;
+    families.forEach((fam, i) => {
+      const colorSet = codecColors[i % codecColors.length];
+      const dotColor = isDark ? colorSet.dark : colorSet.light;
+
+      // Color dot
+      ctx.beginPath();
+      ctx.arc(legendX + 5, legendY - 3, 4, 0, Math.PI * 2);
+      ctx.fillStyle = dotColor;
+      ctx.fill();
+
+      // Label
+      ctx.fillStyle = textColor;
+      ctx.fillText(fam, legendX + 13, legendY);
+      legendX += ctx.measureText(fam).width + 30;
+    });
+  }
 }
 
 // ============================
@@ -1716,6 +1782,11 @@ function createCollapsibleSection(titleText, count, startCollapsed) {
   if (collapsed) body.style.display = "none";
   section.appendChild(body);
 
+  // Track initial state so it persists across re-renders
+  if (!(titleText in _expandedSections)) {
+    _expandedSections[titleText] = !collapsed;
+  }
+
   const toggle = () => {
     const isCollapsed = body.style.display === "none";
     body.style.display = isCollapsed ? "block" : "none";
@@ -1798,6 +1869,19 @@ function renderJumpNav(outputEl, sections) {
 
 function renderResults(data) {
   const outputEl = document.getElementById("output");
+
+  // Save scroll position and expanded section states before re-render
+  const scrollY = window.scrollY || window.pageYOffset;
+
+  // Read actual DOM state of all collapsible sections
+  outputEl.querySelectorAll(".collapsible-section").forEach(sec => {
+    const h2 = sec.querySelector(".section-header h2");
+    const body = sec.querySelector(".section-body");
+    if (h2 && body) {
+      _expandedSections[h2.textContent] = body.style.display !== "none";
+    }
+  });
+
   outputEl.innerHTML = "";
 
   document.getElementById("copyResultsBtn").style.display = "inline-block";
@@ -2081,7 +2165,7 @@ function renderResults(data) {
   // VIDEO representations
   if (data.videoRepresentations.length > 0) {
     const { section, body } = createCollapsibleSection(
-      "Video Representations", data.videoRepresentations.length, data.videoRepresentations.length > 10
+      "Video Representations", data.videoRepresentations.length, false
     );
     renderVideoTable(body, data.videoRepresentations);
     outputEl.appendChild(section);
@@ -2525,6 +2609,9 @@ function renderResults(data) {
   if (jumpSections.length > 0) {
     renderJumpNav(outputEl, jumpSections);
   }
+
+  // Restore scroll position after re-render (for live refresh)
+  requestAnimationFrame(() => window.scrollTo(0, scrollY));
 }
 
 // ============================
@@ -2705,6 +2792,9 @@ function renderSubtitleTable(parent, reps) {
 // SEGMENT URL PANEL
 // ============================
 
+// Track which rep IDs have open segment panels
+const _openSegmentPanels = new Set();
+
 function renderSegmentButton(td, rep, tbody) {
   const segData = computeSegmentUrls(rep);
   const totalSegs = segData.segments.length;
@@ -2720,16 +2810,11 @@ function renderSegmentButton(td, rep, tbody) {
 
   let panelRow = null;
 
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (panelRow) {
-      panelRow.remove();
-      panelRow = null;
-      btn.textContent = "📂 " + (totalSegs > 0 ? totalSegs : "View");
-      return;
-    }
+  const openPanel = () => {
+    if (panelRow) return; // already open
 
     btn.textContent = "📁 Hide";
+    _openSegmentPanels.add(rep.id);
     panelRow = document.createElement("tr");
     panelRow.className = "segment-panel-row";
     const panelTd = document.createElement("td");
@@ -2915,9 +3000,28 @@ function renderSegmentButton(td, rep, tbody) {
     } else {
       tbody.appendChild(panelRow);
     }
+  };
+
+  const closePanel = () => {
+    if (!panelRow) return;
+    panelRow.remove();
+    panelRow = null;
+    _openSegmentPanels.delete(rep.id);
+    btn.textContent = "📂 " + (totalSegs > 0 ? totalSegs : "View");
+  };
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (panelRow) closePanel();
+    else openPanel();
   });
 
   td.appendChild(btn);
+
+  // Auto-open if this panel was open before re-render
+  if (rep.id && _openSegmentPanels.has(rep.id)) {
+    requestAnimationFrame(() => openPanel());
+  }
 }
 
 // ============================
